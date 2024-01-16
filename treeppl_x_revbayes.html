@@ -9,7 +9,7 @@
 <meta name="author" content="Mariana Braga">
 <meta name="dcterms.date" content="2024-01-16">
 
-<title>Treeppl x RevBayes - host repertoire</title>
+<title>Comparison of inference under the host repertoire model in TreePPL vs RevBayes</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -81,7 +81,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">Treeppl x RevBayes - host repertoire</h1>
+<h1 class="title">Comparison of inference under the host repertoire model in TreePPL vs RevBayes</h1>
 </div>
 
 
@@ -108,8 +108,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 </header>
 
-<section id="comparison-of-inference-under-the-host-repertoire-model-in-treeppl-vs-revbayes" class="level1">
-<h1>Comparison of inference under the host repertoire model in TreePPL vs RevBayes</h1>
 <p>Packages</p>
 <div class="cell">
 <details>
@@ -123,6 +121,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(here)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 </div>
+<section id="prepare-data-for-analyses" class="level2">
+<h2 class="anchored" data-anchor-id="prepare-data-for-analyses">Prepare data for analyses</h2>
 <p>Create symbiont tree, host tree, and interaction matrix.</p>
 <div class="cell">
 <details>
@@ -171,9 +171,35 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>plot_data</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 </details>
 <div class="cell-output-display">
-<p><img src="treeppl_x_revbayes_files/figure-html/unnamed-chunk-4-1.png" class="img-fluid" width="672"></p>
+<p><img src="treeppl_x_revbayes_files/figure-html/plot_data-1.png" class="img-fluid" width="672"></p>
 </div>
 </div>
+</section>
+<section id="run-treeppl" class="level2">
+<h2 class="anchored" data-anchor-id="run-treeppl">Run treeppl</h2>
+<div class="cell">
+<details>
+<summary>Show the code</summary>
+<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int,</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co"># interactions: Int[], host_distances: Real[],</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co"># dMean: Real, tune: Real</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>ntips <span class="ot">&lt;-</span> <span class="fu">Ntip</span>(symbiont_tree)</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>nhosts <span class="ot">&lt;-</span> <span class="fu">Ntip</span>(host_tree)</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>interactions <span class="ot">&lt;-</span> matrix</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>host_distances <span class="ot">&lt;-</span> <span class="fu">cophenetic.phylo</span>(host_tree)</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>dMean <span class="ot">&lt;-</span> <span class="fu">sum</span>(host_distances) <span class="sc">/</span> <span class="fu">factorial</span>(nhosts)</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>tune <span class="ot">&lt;-</span> <span class="fl">0.9</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="co"># I can't write a tree object to the json format that treeppl understands yet</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</details>
+</div>
+</section>
+<section id="analyse-outputs" class="level2">
+<h2 class="anchored" data-anchor-id="analyse-outputs">Analyse outputs</h2>
+<section id="revbayes" class="level3">
+<h3 class="anchored" data-anchor-id="revbayes">RevBayes</h3>
+</section>
 </section>
 
 </main>

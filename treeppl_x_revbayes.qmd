@@ -1,5 +1,5 @@
 ---
-title: "Treeppl x RevBayes - host repertoire"
+title: "Comparison of inference under the host repertoire model in TreePPL vs RevBayes"
 author: "Mariana Braga"
 date: last-modified
 date-format: long
@@ -14,8 +14,6 @@ execute:
   warning: false
 ---
 
-# Comparison of inference under the host repertoire model in TreePPL vs RevBayes
-
 Packages
 
 ```{r}
@@ -28,10 +26,13 @@ library(tidyverse)
 library(ape)
 library(ggtree)
 library(evolnets)
-library(here)
+library(coda)
+library(RevGadgets)
+library(patchwork)
+library(kdensity)
 ```
 
-## Prepare data for analyses
+## 1. Prepare data for analyses
 
 Create symbiont tree, host tree, and interaction matrix.
 
@@ -97,7 +98,7 @@ plot_data
 ```
 
 
-## Run treeppl
+## 2. Run treeppl
 
 ```{r}
 #| label: run_treeppl
@@ -117,17 +118,66 @@ tune <- 0.9
 ```
 
 
-## Analyse outputs
+## 3. Output analysis
 
-### RevBayes
+### 3.1 RevBayes
 
 ```{r}
-#| label: out_revbayes
+#| label: convergence_rb
 
+long_rb_log1 <- read.table("output/long_stem/revbayes/long.1.test4x3.log", header = TRUE)
+long_rb_log2 <- read.table("output/long_stem/revbayes/long.2.test4x3.log", header = TRUE)
+
+# take only columns of interest
+long_rb_log1 <- long_rb_log1[,c(1,5:6,8:11)] %>% filter(Iteration > 100000)
+long_rb_log2 <- long_rb_log2[,c(1,5:6,8:11)] %>% filter(Iteration > 100000)
+
+# give them better column names
+colnames(long_rb_log1) <- colnames(long_rb_log2) <- c("iteration","clock","beta", "gain01", "loss10", "gain12", "loss21")
+
+# convergence test
+gelman.diag(mcmc.list(as.mcmc(long_rb_log1), as.mcmc(long_rb_log2)))
+
+effectiveSize(long_rb_log1)
+effectiveSize(long_rb_log2)
+```
+
+Plot posterior distribution for each parameter
+
+```{r}
+#| label: param_dens_rb
+#| fig-width: 5
+#| fig-height: 7
+
+trace_long_rb <- list(long_rb_log2)
+
+params <- colnames(long_rb_log1)[-1]
+
+dens_long_rb_list <- list()
+for(i in seq_along(params)){
+  dens_long_rb_list[i] <- plotTrace(trace_long_rb, vars = params[i])  
+}
+wrap_plots(dens_long_rb_list, ncol = 2)
 
 ```
 
+Test if beta > 0
 
+```{r}
+#| label: bayes_factor
+
+# Bayes factor
+
+d_prior <- dexp(x=0, rate=1)
+
+kd_beta <- kdensity(x = long_rev_log2$beta,
+                    kernel='gamma',
+                    support=c(0,Inf),
+                    bw = 0.02)
+max = kd_beta(0)
+
+(BF <- d_prior/max)  # beta not different from zero
+```
 
 
 
