@@ -1,0 +1,7 @@
+out_id=2; source("hostrep_inf_long.Rev");
+source("hostrep_inf_long.Rev")
+q()
+out_id=1; source("hostrep_inf_long.Rev");
+out_id=2; source("hostrep_inf_long.Rev");
+out_id=1; source("hostrep_inf_tiny.Rev");
+out_id=2; source("hostrep_inf_tiny.Rev");

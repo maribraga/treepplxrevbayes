@@ -1,0 +1,134 @@
+---
+title: "Treeppl x RevBayes - host repertoire"
+author: "Mariana Braga"
+date: last-modified
+date-format: long
+format: 
+  html:
+    code-fold: true
+    code-summary: "Show the code"
+editor: source
+editor_options: 
+  chunk_output_type: console
+execute:
+  warning: false
+---
+
+# Comparison of inference under the host repertoire model in TreePPL vs RevBayes
+
+Packages
+
+```{r}
+#| label: "packages"
+#| message: FALSE
+
+#install_github("treeppl/treepplr")
+library(treepplr)
+library(tidyverse)
+library(ape)
+library(ggtree)
+library(evolnets)
+library(here)
+```
+
+## Prepare data for analyses
+
+Create symbiont tree, host tree, and interaction matrix.
+
+```{r}
+#| eval: false
+#| label: simulate_data
+
+tree <- rcoal(4, rooted = TRUE)
+tree$tip.label <- paste0("S", 1:4)
+height <- node.depth.edgelength(tree)[1]
+tree$edge.length <- tree$edge.length * (2.0/height)
+
+is.binary(tree)
+is.ultrametric(tree)
+is.rooted(tree)
+
+host_tree <- rcoal(3, rooted = TRUE)
+host_tree$tip.label <- paste0("H", 1:3)
+plot(host_tree)
+axisPhylo()
+
+matrix <- matrix(data = c(2,0,2, 2,0,0, 2,2,0, 0,2,0), nrow = 4, ncol = 3, byrow = TRUE)
+rownames(matrix) <- tree$tip.label
+colnames(matrix) <- host_tree$tip.label
+
+# write files
+write.csv(matrix, "data/matrix.csv", row.names = TRUE)
+write.nexus.data(matrix, "data/matrix.nex", format = "standard")
+write.tree(host_tree, "data/host_tree.tre")
+write.tree(tree, "data/tree.tre")
+
+# add stem branch to symbiont tree
+tree_string <- readLines("data/tree.tre")
+tree_tiny_stem_string <- sub(");$", "):0.01;", tree_string)
+tree_long_stem_string <- sub(");$", "):2.0;", tree_string)
+
+writeLines(tree_tiny_stem_string, "data/tree_tiny_stem.tre")
+writeLines(tree_long_stem_string, "data/tree_long_stem.tre")
+```
+
+```{r}
+#| echo: false
+#| label: read_data
+
+tree <- read.tree("data/tree.tre")
+host_tree <- read.tree("data/host_tree.tre")
+matrix <- read.csv("data/matrix.csv", row.names = 1) %>% as.matrix()
+```
+
+Because RevBayes has it's own way to label tree nodes, we'll use the symbiont tree processed by RevBayes to keep track of node labels and be able to match them later. Then we can plot all data together.
+
+```{r}
+#| label: plot_data
+#| fig-width: 7
+#| fig-height: 6
+
+symbiont_tree <- read_tree_from_revbayes("data/tree_tiny_stem_Rev.tre")
+
+plot_data <- plot_matrix_phylo(matrix, at_nodes = NULL, symbiont_tree, host_tree, find_modules = FALSE)
+plot_data[[1]] <- plot_data[[1]] + geom_nodelab(size = 3, hjust = -0.1)
+plot_data
+
+```
+
+
+## Run treeppl
+
+```{r}
+#| label: run_treeppl
+
+# symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int,
+# interactions: Int[], host_distances: Real[],
+# dMean: Real, tune: Real
+
+ntips <- Ntip(symbiont_tree)
+nhosts <- Ntip(host_tree)
+interactions <- matrix
+host_distances <- cophenetic.phylo(host_tree)
+dMean <- sum(host_distances) / factorial(nhosts)
+tune <- 0.9
+
+# I can't write a tree object to the json format that treeppl understands yet
+```
+
+
+## Analyse outputs
+
+### RevBayes
+
+```{r}
+#| label: out_revbayes
+
+
+```
+
+
+
+
+
+
