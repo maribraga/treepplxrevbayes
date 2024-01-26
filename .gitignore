@@ -11,6 +11,7 @@ ignore/**
 **/*_ignore
 
 output/*/revbayes/*.txt
+output
 
 out
 out.mc

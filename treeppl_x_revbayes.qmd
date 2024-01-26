@@ -20,9 +20,8 @@ Packages
 #| label: "packages"
 #| message: FALSE
 
-#install_github("treeppl/treepplr")
+#install_github("maribraga/treepplr") # while developing the package, download from my fork
 library(treepplr)
-library(tidyverse)
 library(ape)
 library(ggtree)
 library(evolnets)
@@ -30,6 +29,7 @@ library(coda)
 library(RevGadgets)
 library(patchwork)
 library(kdensity)
+library(tidyverse)
 ```
 
 ## 1. Prepare data for analyses
@@ -102,6 +102,7 @@ plot_data
 
 ```{r}
 #| label: run_treeppl
+#| eval: false
 
 # symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int,
 # interactions: Int[], host_distances: Real[],
@@ -114,7 +115,15 @@ host_distances <- cophenetic.phylo(host_tree)
 dMean <- sum(host_distances) / factorial(nhosts)
 tune <- 0.9
 
-# I can't write a tree object to the json format that treeppl understands yet
+# I can't write a tree object to the json format that treeppl understands yet,
+# so I'll run passing the json input file directly
+
+out_treeppl <- run_treeppl(source = "/Users/mari/repos/treepplxrevbayes/code/treeppl/host_repertoire.tppl", 
+                           data_path = "./data/test4x3_input.json",
+                           method = "smc-apf",  
+                           samples = 1000, chains = 100, sample_freq = 1000,
+                           out_path = "./output/tiny_stem/treeppl/out_r_11.json")
+
 ```
 
 
@@ -125,18 +134,18 @@ tune <- 0.9
 ```{r}
 #| label: convergence_rb
 
-long_rb_log1 <- read.table("output/long_stem/revbayes/long.1.test4x3.log", header = TRUE)
-long_rb_log2 <- read.table("output/long_stem/revbayes/long.2.test4x3.log", header = TRUE)
+long_rb_log1 <- read.table("output/tiny_stem/only_mu/revbayes/tiny_mu.1.test4x3.log", header = TRUE)
+long_rb_log2 <- read.table("output/tiny_stem/only_mu/revbayes/tiny_mu.2.test4x3.log", header = TRUE)
 
 # take only columns of interest
-long_rb_log1 <- long_rb_log1[,c(1,5:6,8:11)] %>% filter(Iteration > 100000)
-long_rb_log2 <- long_rb_log2[,c(1,5:6,8:11)] %>% filter(Iteration > 100000)
+long_rb_log1 <- long_rb_log1[,c(1,5:6,8:11)] %>% filter(Iteration > 100000 & Iteration <= 700000)
+long_rb_log2 <- long_rb_log2[,c(1,5:6,8:11)] %>% filter(Iteration > 100000 & Iteration <= 700000)
 
 # give them better column names
 colnames(long_rb_log1) <- colnames(long_rb_log2) <- c("iteration","clock","beta", "gain01", "loss10", "gain12", "loss21")
 
 # convergence test
-gelman.diag(mcmc.list(as.mcmc(long_rb_log1), as.mcmc(long_rb_log2)))
+gelman.diag(mcmc.list(as.mcmc(long_rb_log1[,1:2]), as.mcmc(long_rb_log2[,1:2])))
 
 effectiveSize(long_rb_log1)
 effectiveSize(long_rb_log2)
@@ -148,6 +157,8 @@ Plot posterior distribution for each parameter
 #| label: param_dens_rb
 #| fig-width: 5
 #| fig-height: 7
+#| eval: false
+#| echo: false
 
 trace_long_rb <- list(long_rb_log2)
 
@@ -170,7 +181,7 @@ Test if beta > 0
 
 d_prior <- dexp(x=0, rate=1)
 
-kd_beta <- kdensity(x = long_rev_log2$beta,
+kd_beta <- kdensity(x = long_rb_log2$beta,
                     kernel='gamma',
                     support=c(0,Inf),
                     bw = 0.02)
@@ -179,6 +190,95 @@ max = kd_beta(0)
 (BF <- d_prior/max)  # beta not different from zero
 ```
 
+
+### 3.2 TreePPL
+
+```{r}
+files <- list.files(path = "./output/tiny_stem/only_mu/treeppl/50k", full.names = TRUE)
+files <- files[5:14]
+
+treeppl_logs <- data.frame()
+for(i in seq_along(files)){
+  log <- read_treeppl_output(files[i], sample_freq = 25000)
+  treeppl_logs <- rbind(treeppl_logs, log)
+}
+
+(zs <- sort(unique(treeppl_logs$normConst)))
+var(zs)
+
+treeppl_logs <- treeppl_logs %>% 
+  mutate(run = 1:nrow(.)) %>% 
+  mutate(posterior = exp(normConst - max(normConst)),
+         sweep = dense_rank(normConst)) 
+
+```
+
+Figure out how many subsamples to take
+
+```{r}
+treeppl_logs %>% 
+  ggplot() +
+  geom_density(aes(norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7) +
+  facet_wrap(vars(normConst)) +
+  theme_bw()
+
+treeppl_logs %>% 
+  filter(norm_weight_within_sweep > 0.001) %>% 
+  ggplot() +
+  geom_col(aes(run, norm_weight_within_sweep), width = 0.1) +
+  facet_wrap(vars(sweep), scales = "free")
+  
+treeppl_logs %>% 
+  filter(sweep == 10) %>% 
+  filter(norm_weight_within_sweep > 0.001) %>% 
+  ggplot() +
+  geom_col(aes(run, norm_weight_within_sweep), width = 0.1)
+
+treeppl_logs %>% 
+  filter(sweep == 3) %>% 
+  pull(norm_weight_within_sweep) %>% 
+  sort(decreasing = TRUE)
+
+```
+
+
+
+Plot parameter estimates from both RevBayes and TreePPL
+
+```{r}
+g1 <- ggplot() +
+  geom_density(aes(clock, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(mu, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+g2 <- ggplot() +
+  geom_density(aes(beta, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(beta, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+g3 <- ggplot() +
+  geom_density(aes(gain01, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_1, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+g4 <- ggplot() +
+  geom_density(aes(loss10, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_2, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+g5 <- ggplot() +
+  geom_density(aes(gain12, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_3, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+g6 <- ggplot() +
+  geom_density(aes(loss21, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_4, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+g1 + g2 + g3 + g4 + g5 + g6 + plot_layout(ncol = 2, nrow = 3, byrow = TRUE)
+
+```
 
 
 
