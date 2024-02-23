@@ -134,8 +134,8 @@ out_treeppl <- run_treeppl(source = "/Users/mari/repos/treepplxrevbayes/code/tre
 ```{r}
 #| label: convergence_rb
 
-long_rb_log1 <- read.table("output/tiny_stem/only_mu/revbayes/tiny_mu.1.test4x3.log", header = TRUE)
-long_rb_log2 <- read.table("output/tiny_stem/only_mu/revbayes/tiny_mu.2.test4x3.log", header = TRUE)
+long_rb_log1 <- read.table("output/long_stem/revbayes/long.1.test4x3.log", header = TRUE)
+long_rb_log2 <- read.table("output/long_stem/revbayes/long.2.test4x3.log", header = TRUE)
 
 # take only columns of interest
 long_rb_log1 <- long_rb_log1[,c(1,5:6,8:11)] %>% filter(Iteration > 100000 & Iteration <= 700000)
@@ -194,29 +194,29 @@ max = kd_beta(0)
 ### 3.2 TreePPL
 
 ```{r}
-files <- list.files(path = "./output/tiny_stem/only_mu/treeppl/50k", full.names = TRUE)
-files <- files[5:14]
+files <- list.files(path = "./output/positive_debt", pattern = "*100k.json", full.names = TRUE)
+files <- files[-3]
 
 treeppl_logs <- data.frame()
 for(i in seq_along(files)){
-  log <- read_treeppl_output(files[i], sample_freq = 25000)
+  log <- read_treeppl_output(files[i], sample_freq = 1000)
   treeppl_logs <- rbind(treeppl_logs, log)
 }
-
-(zs <- sort(unique(treeppl_logs$normConst)))
-var(zs)
 
 treeppl_logs <- treeppl_logs %>% 
   mutate(run = 1:nrow(.)) %>% 
   mutate(posterior = exp(normConst - max(normConst)),
          sweep = dense_rank(normConst)) 
 
+(zs <- sort(unique(treeppl_logs$normConst)))
+var(zs)
 ```
 
 Figure out how many subsamples to take
 
 ```{r}
 treeppl_logs %>% 
+  filter(norm_weight_within_sweep > 0.001) %>% 
   ggplot() +
   geom_density(aes(norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7) +
   facet_wrap(vars(normConst)) +
@@ -229,51 +229,105 @@ treeppl_logs %>%
   facet_wrap(vars(sweep), scales = "free")
   
 treeppl_logs %>% 
-  filter(sweep == 10) %>% 
+  filter(sweep == 2) %>% 
   filter(norm_weight_within_sweep > 0.001) %>% 
   ggplot() +
   geom_col(aes(run, norm_weight_within_sweep), width = 0.1)
 
 treeppl_logs %>% 
-  filter(sweep == 3) %>% 
+  filter(sweep == 1) %>% 
   pull(norm_weight_within_sweep) %>% 
   sort(decreasing = TRUE)
 
 ```
 
 
+Plot parameter estimates from both RevBayes and TreePPL using the the normalized weights
 
-Plot parameter estimates from both RevBayes and TreePPL
+```{r}
+gg1 <- ggplot() +
+  geom_density(aes(clock, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_col(aes(mu, norm_weight_within_sweep), width = 0.01, alpha = 0.7, data = treeppl_logs) +
+  #geom_density(aes(mu, weight = norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+gg2 <- ggplot() +
+  geom_density(aes(beta, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_col(aes(beta, norm_weight_within_sweep), width = 0.01, alpha = 0.7, data = filter(treeppl_logs, sweep == 1)) +
+  #geom_density(aes(beta, weight = norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+gg3 <- ggplot() +
+  geom_density(aes(gain01, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_col(aes(lambda_1, norm_weight_within_sweep), width = 0.01, alpha = 0.7, data = treeppl_logs) +
+  #geom_density(aes(lambda_1, weight = norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+gg4 <- ggplot() +
+  geom_density(aes(loss10, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_col(aes(lambda_2, norm_weight_within_sweep), width = 0.01, alpha = 0.7, data = treeppl_logs) +
+  #geom_density(aes(lambda_2, weight = norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+gg5 <- ggplot() +
+  geom_density(aes(gain12, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_col(aes(lambda_3, norm_weight_within_sweep), width = 0.01, alpha = 0.7, data = treeppl_logs) +
+  #geom_density(aes(lambda_3, weight = norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+gg6 <- ggplot() +
+  geom_density(aes(loss21, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_col(aes(lambda_4, norm_weight_within_sweep), width = 0.01, alpha = 0.7, data = treeppl_logs) +
+  #geom_density(aes(lambda_4, weight = norm_weight_within_sweep, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  theme_bw()
+
+gg1 + gg2 + gg3 + gg4 + gg5 + gg6 + plot_layout(ncol = 2, nrow = 3, byrow = TRUE)
+
+```
+
+Choose number of particles per sweep
+```{r}
+nsamples <- 3
+subset <- treeppl_logs %>%
+  group_by(sweep) %>% 
+  slice_max(norm_weight_within_sweep, n = nsamples) %>% 
+  mutate(wposterior = norm_weight_within_sweep * posterior)
+
+```
+
+
+
+Plot parameter estimates from both RevBayes and TreePPL using the normalizing constant
 
 ```{r}
 g1 <- ggplot() +
   geom_density(aes(clock, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
-  geom_density(aes(mu, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  geom_density(aes(mu, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
   theme_bw()
 
 g2 <- ggplot() +
   geom_density(aes(beta, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
-  geom_density(aes(beta, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  geom_density(aes(beta, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
   theme_bw()
 
 g3 <- ggplot() +
   geom_density(aes(gain01, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
-  geom_density(aes(lambda_1, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  geom_density(aes(lambda_1, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
   theme_bw()
 
 g4 <- ggplot() +
   geom_density(aes(loss10, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
-  geom_density(aes(lambda_2, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  geom_density(aes(lambda_2, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
   theme_bw()
 
 g5 <- ggplot() +
   geom_density(aes(gain12, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
-  geom_density(aes(lambda_3, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  geom_density(aes(lambda_3, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
   theme_bw()
 
 g6 <- ggplot() +
   geom_density(aes(loss21, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
-  geom_density(aes(lambda_4, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = treeppl_logs) +
+  geom_density(aes(lambda_4, weight = posterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
   theme_bw()
 
 g1 + g2 + g3 + g4 + g5 + g6 + plot_layout(ncol = 2, nrow = 3, byrow = TRUE)
@@ -281,4 +335,49 @@ g1 + g2 + g3 + g4 + g5 + g6 + plot_layout(ncol = 2, nrow = 3, byrow = TRUE)
 ```
 
 
+Plot parameter estimates from both RevBayes and TreePPL using the normalizing constant * norm weight within sweep
+
+```{r}
+wg1 <- ggplot() +
+  geom_density(aes(clock, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(mu, weight = wposterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
+  theme_bw()
+
+wg2 <- ggplot() +
+  geom_density(aes(beta, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(beta, weight = wposterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
+  theme_bw()
+
+wg3 <- ggplot() +
+  geom_density(aes(gain01, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_1, weight = wposterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
+  theme_bw()
+
+wg4 <- ggplot() +
+  geom_density(aes(loss10, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_2, weight = wposterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
+  theme_bw()
+
+wg5 <- ggplot() +
+  geom_density(aes(gain12, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_3, weight = wposterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
+  theme_bw()
+
+wg6 <- ggplot() +
+  geom_density(aes(loss21, after_stat(scaled)), fill = "steelblue", col = NA, alpha = 0.7, data = long_rb_log2) +
+  geom_density(aes(lambda_4, weight = wposterior, after_stat(scaled)), fill = "darkorange", col = NA, alpha = 0.7, data = subset) +
+  theme_bw()
+
+wg1 + wg2 + wg3 + wg4 + wg5 + wg6 + plot_layout(ncol = 2, nrow = 3, byrow = TRUE)
+
+```
+
+
+```{r}
+ggplot() +
+  geom_col(aes(lambda_1, posterior), width = 0.01, alpha = 0.7, data = subset, fill = "darkorange") +
+  geom_col(aes(lambda_1, wposterior), width = 0.01, alpha = 0.7, data = subset, fill = "steelblue") +
+
+  theme_bw()
+```
 

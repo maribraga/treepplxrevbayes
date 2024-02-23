@@ -9,7 +9,7 @@
  * Compile 
  * tpplc host_repertoire.tppl -m smc-apf  
  * 
- * Run
+ * Run (example with 10 particles and 1 sweep)
  * ./out treeppl/models/data/hostrep.json 10 1
  */
 
@@ -50,9 +50,9 @@ type ProposedHistory = ProposedHistory{log_debt: Real, events: Event[]}
 // start ages, which is the time of the event that led to that combination
 type HistoryPoint = HistoryPoint{age: Real, repertoire: Int[]}
 
-// HistoryScore type used to store a vector of history points and a log
-// score associated with this history.
-type HistoryScore = HistoryScore{log_score: Real, history: HistoryPoint[]}
+// HistoryWeight type used to store a vector of history points and a log
+// weight associated with this history.
+type HistoryWeight = HistoryWeight{log_weight: Real, history: HistoryPoint[]}
 
 // Tree decorated with ancestral host repertoires and branch repertoire histories
 type HistoryTree =
@@ -61,7 +61,7 @@ type HistoryTree =
                 left: HistoryTree, right: HistoryTree}
 
 // Type used to hold the character histories and parameter values to be outputed
-type ReturnType = ReturnType{lambda: Real[], mu: Real, beta: Real} //tree: HistoryTree, 
+type ReturnType = ReturnType{tree: HistoryTree, lambda: Real[], mu: Real, beta: Real}
 
 /*
  *  Model
@@ -84,7 +84,7 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
 
   // Set priors for model parameters
   assume lambda ~ Dirichlet([1.0,1.0,1.0,1.0]); 
-  assume mu ~ Exponential(1.0);
+  assume mu ~ Exponential(10.0);
   assume beta ~ Exponential(1.0);
 
   // Set transition rate matrix for three-state independence model
@@ -98,11 +98,13 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
   // Calculate stationary probabilities for the rate matrix q
   let stationary_probs = stationaryProbs(lambda);
 
+  // Create a matrix of distance between hosts
   let dMatrix = mtxCreate(nhosts, nhosts, host_distances);
 
   // Package model parameters into an object for convenient calling
   let mp = ModelParams{qMatrix = qMatrix, dMatrix = dMatrix, dMean = dMean, beta = beta};
 
+  // Create interaction matrix (using reals for convenience, but should be Int)
   let interactions_reals = sint2real(interactions);
   let iMatrix = mtxCreate(ntips, nhosts, interactions_reals);
 
@@ -112,20 +114,24 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
   // Propose a repertoire for the root of the symbiont tree
   // based on the state probabilities from the belief propagation
   let probRecordSequence = sapply(probs_tree.probs, createProbRecord);
+  // assume is within function categorical
   let root_rep = sapply(probRecordSequence, categorical);
 
-  let log_root_rep_debt = seqSumReal(zipWith(categoricalLogScore, root_rep, probRecordSequence));
-	// Note: categorical works here because root_rep id 0-based
-
+  // check if sampled root state contains at least one actual host (state 2)
   let valid_root = any(is2, root_rep);
 
+  // if root state is invalid, kill particle
   if !valid_root { 
     weight 0.0; 
     resample;
   } 
- 
-  let log_score_root = - ( log( (3.0 ^ Real(nhosts)) - (2.0 ^ Real(nhosts)) ) );
 
+  // calculate the sum of weights of the sampled root states
+  let log_root_rep_debt = seqSumReal(zipWith(categoricalLogScore, root_rep, probRecordSequence));
+	// Note: categorical works here because root_rep is 0-based
+ 
+  // calculate -log of the number of possible root states
+  let log_weight_root = - ( log( (3.0 ^ Real(nhosts)) - (2.0 ^ Real(nhosts)) ) );
 
   // Simulate repertoire history on the symbiont tree (left and right daughters)
   let left = simulate(probs_tree.left, HistoryPoint{age = probs_tree.age, repertoire = root_rep}, mp, iMatrix);
@@ -133,15 +139,16 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
 
   // Root node doesn't have any history (no subroot branch)
   let historyTree = HistoryNode{age = probs_tree.age, label = probs_tree.label,
-    repertoire = root_rep, history = [], log_rep_debt = log_root_rep_debt-log_score_root,
+    repertoire = root_rep, history = [], log_rep_debt = log_root_rep_debt-log_weight_root,
     left = left, right = right};
 
   // Factor in the net debt of the proposed ancestral repertoires 
   // at nodes and leaves in the historyTree
-  logWeight( -get_rep_debt(historyTree) );
+  // Mariana: I'm not sure if this should be minus
+  logWeight( get_rep_debt(historyTree) );
   
   // Return symbiont tree with simulated character history and parameter values
-  return ReturnType{lambda = lambda, mu = mu, beta = beta};  //tree = historyTree, 
+  return ReturnType{tree = historyTree, lambda = lambda, mu = mu, beta = beta};
 } 
 
 
@@ -172,9 +179,12 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
 function get_proposal_params(symbiont_tree: TreeLabeled, iMatrix: Tensor[Real], qMatrix: Tensor[Real], 
   stationary_probs: Tensor[Real], tune: Real): ProbsTree {
 
-  let msgTree = postorder_msgs(symbiont_tree, iMatrix, qMatrix);  
-  let n = length(getMsgTreeMsg(msgTree));
+  // postorder message passing
+  let msgTree = postorder_msgs(symbiont_tree, iMatrix, qMatrix);
+  // root state probabilities given sampled lambdas and independence model  
+  let n = length(getMsgTreeMsg(msgTree));  // getMsgTreeMsg is a bug workaround
   let pis = rep(n, stationary_probs);
+  // calculate final probabilites from belief propagation
   return final_probs(msgTree, pis, qMatrix, tune);
 
 }
@@ -182,19 +192,25 @@ function get_proposal_params(symbiont_tree: TreeLabeled, iMatrix: Tensor[Real], 
 // Compute postorder messages on the observed tree
 function postorder_msgs(tree: TreeLabeled, iMatrix: Tensor[Real], qMatrix: Tensor[Real]) : MsgTree {
 
+  // once we get to the leafs, make messages from tip states
   if tree is Leaf {
     return MsgLeaf{age = 0.0, label = tree.label, out_msg = observationMessage(mtxGetRow(tree.label, iMatrix))};
   }
 
+  // recursive call all the way to leafs
   let left  = postorder_msgs(tree.left ,iMatrix, qMatrix);
   let right = postorder_msgs(tree.right,iMatrix, qMatrix);
 
+  // transition matrix given instantaneous rate matrix and branch length
+  // transposed because we are going backwards in time
   let tMatrixLeft = mtxTrans(mtxExp(mtxSclrMul(tree.age-left.age, qMatrix)));   
   let tMatrixRight = mtxTrans(mtxExp(mtxSclrMul(tree.age-right.age, qMatrix)));
 
+  // in message from child = out message from child * transition matrix
   let left_in_msg  = sapply1(left.out_msg, mtxMul, tMatrixLeft);
   let right_in_msg = sapply1(right.out_msg, mtxMul, tMatrixRight);
 
+  // multiply children in messages and then normalise final out message 
   let out_msg = normalizeMessage(mulMessage(left_in_msg, right_in_msg));
 
   return MsgNode{age= tree.age, label= tree.label, left= left, right= right, 
@@ -210,8 +226,9 @@ function observationMessage(obs_repertoire: Tensor[Real]) : Tensor[Real][] {
 // Takes a single interaction and creates the message
 // Interactions are of type Real because of limitations in boolean comparisons
 function makeStateMessage(interaction: Real): Tensor[Real] {
+  
   // NOTE: we do not have a switch statement, perhaps we need in the future?
-
+  // in this version we assume observations are the truth
   if (interaction == 0.0) {
     return rvecCreate(3, [1., 0., 0.]);
   } else {
@@ -221,7 +238,8 @@ function makeStateMessage(interaction: Real): Tensor[Real] {
       		if (interaction == 2.0) {
     				return rvecCreate(3, [0., 0., 1.]);
 					} else {
-    				return rvecCreate(3, [1., 1., 1.]);
+            // if state is not 0, 1 or 2, all states have equal probability
+    				return rvecCreate(3, [1., 1., 1.]);  
 						}
 				}
 		}
@@ -229,7 +247,8 @@ function makeStateMessage(interaction: Real): Tensor[Real] {
 
 // Compute final probabilities from belief propagation on the observed symbiont tree
 function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[Real], tune: Real) : ProbsTree {
-    
+  
+  // start from the root, where the parent message is the stationary distribution
   let probs = normalizeMessage(
 		messageElementPower(mulMessage(tree.out_msg, parent_msg), tune)
   );
@@ -238,15 +257,20 @@ function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[
     return ProbsLeaf{age= 0.0, label= tree.label, probs = probs};
   } 
 
+  // get branch lengths
   let left_branch = tree.age - getMsgTreeAge(tree.left);
   let right_branch = tree.age - getMsgTreeAge(tree.right);
 
+  // transition matrix
   let tMatrixLeft = mtxExp(mtxSclrMul(left_branch, qMatrix));
   let tMatrixRight = mtxExp(mtxSclrMul(right_branch, qMatrix));
 
-  let left_parent_msg  = sapply1(mulMessage(parent_msg,tree.left_in_msg), mtxMul, tMatrixLeft);
-  let right_parent_msg = sapply1(mulMessage(parent_msg,tree.right_in_msg), mtxMul, tMatrixRight);
+  // get parent message to each child
+  // TO DO: check that it is really parent_msg and not probs here
+  let left_parent_msg  = sapply1(mulMessage(parent_msg, tree.left_in_msg), mtxMul, tMatrixLeft);
+  let right_parent_msg = sapply1(mulMessage(parent_msg, tree.right_in_msg), mtxMul, tMatrixRight);
 
+  // continue up the tree (root -> leafs)
   let left  =  final_probs(tree.left,  left_parent_msg, qMatrix, tune);
   let right =  final_probs(tree.right, right_parent_msg, qMatrix, tune);
 
@@ -259,41 +283,49 @@ function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[
 // Simulate an evolutionary history for the host repertoires, from root to leaves
 function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatrix: Tensor[Real]) : HistoryTree {
     
+  // this starts from the root children
+
   // Propose a repertoire. The propose mechanism means that the simulation
   // should be "penalized" for the probability associated with the draw. 
-  let probs = getProbs(tree);  // TODO: is this needed?
+  let probs = getProbs(tree);  // bug workaround
   let probRecordSequence = sapply(tree.probs, createProbRecord);
   let repertoire = sapply(probRecordSequence, categorical);      // Note: assume is within function categorical
     
   let log_rep_debt = seqSumReal(zipWith(categoricalLogScore, repertoire, probRecordSequence)); 
 	// Note: categorical works here because repertoire id 0-based
   	
+  // check if sampled repertoire contains at least one actual host (state 2)
   let valid_rep = any(is2, repertoire);  
+  
+  // if repertoire is invalid, kill particle
   if !valid_rep { 
     weight 0.0; 
     resample;
   } 
 
 	let stop = HistoryPoint{age = getProbsTreeAge(tree), repertoire = repertoire};
+  // simulate a character history from parent (start) to current node/leaf (stop)
 	let history = simulate_history(start, stop, mp);
   
 	if tree is ProbsLeaf {
 
+    // calculate weight of proposed repertoire given observation messages
+    // this weight won't be repayed 
 		let obs_msg = observationMessage(mtxGetRow(tree.label, iMatrix)); 
 		let obsRecordSequence = sapply(obs_msg, createProbRecord);
-		let log_score = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
+		let log_weight = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
 		// Note: categorical works here because repertoire id 0-based
 		
 		return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
-		                   history = history, log_rep_debt = log_rep_debt - log_score};
+		                   history = history, log_rep_debt = log_rep_debt - log_weight};
 	}
 
+  // simulate up the tree (root -> leaf)
 	let left = simulate(tree.left, stop, mp, iMatrix);
 	let right = simulate(tree.right, stop, mp, iMatrix);
 
 	return HistoryNode{age = tree.age, label = tree.label, repertoire = repertoire,
-					   history = history, log_rep_debt = log_rep_debt,
-					   left = left, right = right};
+    history = history, log_rep_debt = log_rep_debt, left = left, right = right};
 
 }
 
@@ -303,29 +335,33 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
 // condition the simulation on those events.
 function simulate_history (from_rep: HistoryPoint, to_rep: HistoryPoint, mp: ModelParams) : HistoryPoint[] {
 
+  // propose events one host at a time
   let proposed_unordered_events = propose_events(1, from_rep, to_rep, mp.qMatrix);
   // order events by decreasing age
 	let eventSeq = qSort(subAge, proposed_unordered_events.events);
   // Simulate repertoire evolution from full model, one event at a time
-  let history_score = simulate_by_event(from_rep.repertoire, eventSeq, 1, from_rep.age, 
-    to_rep.age, mp, proposed_unordered_events.log_debt);
+  let history_weight = simulate_by_event(from_rep.repertoire, eventSeq, 1, from_rep.age, to_rep.age, mp);
 	
-  // Now we have both debt and score at an alignment point 
-  logWeight(history_score.log_score - proposed_unordered_events.log_debt); 
+  // Now we have both debt and weight at an alignment point 
+  logWeight(history_weight.log_weight - proposed_unordered_events.log_debt); 
 
-  return history_score.history;
+  // return only history since weight has already been updated
+  return history_weight.history;
 }
 
 // Propose events from independence model
 function propose_events (host_index: Int, from_rep: HistoryPoint, to_rep: HistoryPoint, qMatrix: Tensor[Real]) : ProposedHistory {
 
-  // End case, have already done all hosts ins the repertoire
+  // End case, have already done all hosts in the repertoire
   if (gti(host_index, length(from_rep.repertoire))) {            
 		return ProposedHistory{log_debt = 0.0, events = []};       
 	}
+
+  // propose events for current host
   let propHist1 = propose_events_for_host(host_index, from_rep.age, to_rep.age, 
 		from_rep.repertoire[host_index], to_rep.repertoire[host_index], qMatrix);
 
+  // propose events for remaining hosts
   let propHist2 = propose_events(addi(host_index, 1), from_rep, to_rep, qMatrix);
 
   return ProposedHistory{log_debt = propHist1.log_debt + propHist2.log_debt, 
@@ -333,10 +369,11 @@ function propose_events (host_index: Int, from_rep: HistoryPoint, to_rep: Histor
 
 	}
 
-// Propose events for one host
+// Propose events for one host along the branch
 function propose_events_for_host (host_index: Int, from_age: Real, end_age: Real,
 	from_state: Int, end_state: Int, qMatrix: Tensor[Real]) : ProposedHistory {
 		
+  // get rate matrix diagonal (addi 1 because states are 0-based)
 	let rate = -(mtxGet(addi(from_state,1), addi(from_state,1), qMatrix));
   
   // Kill the particle if we are trying to subdivide a time segment that
@@ -349,6 +386,7 @@ function propose_events_for_host (host_index: Int, from_age: Real, end_age: Real
     resample;
   }
 
+  // sample time for next event
   let t = getWaitingTime(from_state, end_state, rate, from_age, end_age);
 	let new_age = from_age - t;
 
@@ -360,25 +398,30 @@ function propose_events_for_host (host_index: Int, from_age: Real, end_age: Real
 		let log_wait_debt = poissonLogScore(0, PoissonParam{rate = rate*(from_age - end_age)});
 		return ProposedHistory{log_debt = log_wait_debt, events = []};
 	}
-
+  // debt for sampled waiting time
   let log_wait_debt = getLogWaitDebt(from_state, end_state, rate, from_age, end_age, t);
+
+  // what are the possible new states given the current state?
 	let to_states = getToStates(from_state); 
-	let state_probs = seqNormalize([mtxGet(addi(from_state,1), addi(to_states[1],1), qMatrix),
+  // sample new state
+  let state_probs = seqNormalize([mtxGet(addi(from_state,1), addi(to_states[1],1), qMatrix),
 																	mtxGet(addi(from_state,1), addi(to_states[2],1), qMatrix)]);
-	
 	assume new_state_pos ~ Categorical(state_probs);
-	let new_state = to_states[addi(new_state_pos, 1)];
-  // Note: Categorical is 0-based, so we need to add 1 do get the correct position
-	let log_event_debt = categoricalLogScore(new_state_pos, CategoricalParam{probs = state_probs}); 
-  // Note: Use position instead of value
+  // Categorical is 0-based, so we need to add 1 do get the correct position
+  let new_state = to_states[addi(new_state_pos, 1)];
+  
+  // Calculate debt for sampled new state. Use position instead of value
+  let log_event_debt = categoricalLogScore(new_state_pos, CategoricalParam{probs = state_probs}); 
 
 	let event = Event{age = new_age, host = host_index, from_state = from_state, to_state = new_state};
+  // propose more events until the end of the branch
 	let propHist = propose_events_for_host(host_index, new_age, end_age, new_state, end_state, qMatrix);
 
 	return ProposedHistory{log_debt = log_wait_debt+log_event_debt+propHist.log_debt, events = join([[event], propHist.events])};
 
 }
 
+// Compute debt of chosen waiting time
 function getLogWaitDebt(from_state: Int, end_state: Int, rate: Real, from_age: Real, end_age: Real, t: Real): Real {
 	if (!eqi(from_state,end_state)) {
 		return log_pdf_exponential_max_t(t, rate, from_age - end_age);
@@ -387,6 +430,7 @@ function getLogWaitDebt(from_state: Int, end_state: Int, rate: Real, from_age: R
 	}
 }
 
+// Sample a waiting time
 function getWaitingTime(from_state: Int, end_state: Int, rate: Real, from_age: Real, end_age: Real): Real {
 	if (!eqi(from_state,end_state)) {
 		return sample_exponential_max_t(rate, from_age - end_age);
@@ -396,6 +440,7 @@ function getWaitingTime(from_state: Int, end_state: Int, rate: Real, from_age: R
 	}
 }
 
+// Which state changes are possible for each state?
 function getToStates(state: Int): Int[] { 
 	if (Real(state) == 0.0) {
 		return [1,2];
@@ -429,15 +474,15 @@ function log_pdf_exponential_max_t(value : Real, rate: Real, max_t: Real) : Real
 
 // Simulate repertoire evolution from full model, one event
 // at a time. We return the sequence of repertoires. We
-// accumulate scores here rather than introducing observe
+// accumulate weights here rather than introducing observe
 // statements, as those observes would not be aligned.
 function simulate_by_event (repertoire: Int[], eventSeq: Event[], event_index: Int,
-	from_age: Real, end_age: Real, mp: ModelParams, log_debt: Real) : HistoryScore {
+	from_age: Real, end_age: Real, mp: ModelParams) : HistoryWeight {
 
 	// End case, deal with last time segment
 	if gti(event_index, length(eventSeq)) {          
 		let change_rate = total_rate(repertoire, mp);
-		return HistoryScore{log_score = poissonLogScore(0, 
+		return HistoryWeight{log_weight = poissonLogScore(0, 
       PoissonParam{rate = change_rate*(from_age-end_age)}), history = []};
 	}
 
@@ -447,26 +492,30 @@ function simulate_by_event (repertoire: Int[], eventSeq: Event[], event_index: I
 	let change_rate = total_rate(repertoire, mp);
 
 	// Note that the first statement will capture the cases where the proposed
-	// history is impossible because the repertoire we are supposed to go to is
-	// empty (the rate is zero).
+	// history is impossible because the repertoire we are supposed to go to
+	// doesn't have an actual host (state 2).
 	if (rate == 0.0) {
     weight 0.0;
     resample;
   }
-  let exp_log_prob = exponentialLogScore(from_age - the_event.age, ExponentialParam{rate=change_rate});
-  let logScore = exp_log_prob + log(rate/change_rate);
+
+  // weight of event (waiting time and state change)
+  let exp_log_prob = exponentialLogScore(from_age - the_event.age, ExponentialParam{rate = change_rate});
+  let log_weight = exp_log_prob + log(rate/change_rate);
 
   // Update repertoire with the change in the_event
   let new_repertoire = sapplyi1(repertoire, getNewState, the_event);
 	let hp = HistoryPoint{age = the_event.age, repertoire = new_repertoire};
   // Simulate next event
-	let simHist = simulate_by_event(new_repertoire, eventSeq, addi(event_index,1), the_event.age, end_age, mp, log_debt);
+	let simHist = simulate_by_event(new_repertoire, eventSeq, addi(event_index,1), the_event.age, end_age, mp);
 
-	return HistoryScore{log_score = simHist.log_score + logScore, history = join([simHist.history, [hp]])};
+  // return the whole branch with the sum of weights and full history
+	return HistoryWeight{log_weight = simHist.log_weight + log_weight, history = join([[hp], simHist.history])};
 }
 
 // Update host states
 function getNewState(i: Int, state: Int, event: Event): Int {
+  // if this is the host that has changed, update state
 	if ( eqi(i, event.host) ) {
 	  return event.to_state;
 	} else {
@@ -477,28 +526,37 @@ function getNewState(i: Int, state: Int, event: Event): Int {
 // Compute rate for a proposed event
 function getRate (repertoire: Int[], host_index: Int, to_state: Int, mp: ModelParams): Real {
 
+  // get state before the event
   let from_state = repertoire[host_index];
+  // get the lambda*mu for the proposed event
   let base_rate = mtxGet(addi(from_state,1), addi(to_state,1), mp.qMatrix);
 
   // Losses are easy, no cross-repertoire modification used here
   if (gti(from_state, to_state)) {
 		
+    // count how many hosts in state 2
 		let n2s = fold(count2s, 0, repertoire);
 		if (eqi(from_state, 2) && Real(n2s) == 1.0) { 
+      // if this is the last actual host, it can't be lost
 			return 0.0;
 		} else {
 			return base_rate;
 		}
+
 	} else {
     
     // We have a gain rate, so we need to factor in beta-dependent cross-repertoire effect
     if (eqi(from_state, 0)) {
+      // if gain is 0->1, account for all potential and actual hosts
       let current_hosts = whichTrue(sapply(repertoire, is1or2)); 
+      // calculate average distance between current hosts and the new host
       let dist = tensorMean(mtxRowCols(mp.dMatrix, host_index, current_hosts));
       return base_rate * (exp(-(mp.beta*(dist/mp.dMean))));
 
     } else {
-      let current_hosts = whichTrue(sapply(repertoire, is2));   
+      // if gain is 1->2, account only for actual hosts
+      let current_hosts = whichTrue(sapply(repertoire, is2));
+      // calculate average distance between current hosts and the new host
       let dist = tensorMean(mtxRowCols(mp.dMatrix, host_index, current_hosts));
       return base_rate * (exp(-(mp.beta*(dist/mp.dMean))));
     }
@@ -508,18 +566,24 @@ function getRate (repertoire: Int[], host_index: Int, to_state: Int, mp: ModelPa
 // Compute total rate of change from a repertoire
 function total_rate (repertoire: Int[], mp: ModelParams): Real {
 
-	let n1s = fold(count1s, 0, repertoire);
+  // sum all loss rates
+  let n1s = fold(count1s, 0, repertoire);
 	let totalLoss1 = Real(n1s) * mtxGet(2, 1, mp.qMatrix);
 	let n2s = fold(count2s, 0, repertoire);
 	let totalLoss2 = getLoss2(Real(n2s), mp);
 
+  // sum all gain rates
+  // apply gainsIf0or1 over repertoire and take repertoire and mp as arguments 
   let gainsSeq = sapplyi2(repertoire, gainsIf0or1, repertoire, mp);
 	let totalGains = seqSumReal(gainsSeq);
 
+  // sum of all possible rates
   return totalLoss1 + totalLoss2 + totalGains;
 }
 
+// Compute the sum of 2->1 loss rates for a repertoire with n2s actual hosts
 function getLoss2 (n2s: Real, mp: ModelParams): Real {
+  // last actual host can't be lost
   if n2s <= 1.0 {
 		let totalLoss2 = 0.0;
     return totalLoss2;
@@ -529,6 +593,7 @@ function getLoss2 (n2s: Real, mp: ModelParams): Real {
 	}
 }
 
+// Compute the sum of gain rates for a repertoire
 function gainsIf0or1 (i: Int, from_state: Int, repertoire: Int[], mp: ModelParams): Real {
 	
 	if (eqi(from_state, 0) || eqi(from_state, 1)) {
@@ -567,6 +632,7 @@ function createProbRecord(p: Tensor[Real]): CategoricalParam {
   return CategoricalParam {probs = p_seq};
 }
 
+// Get element i from a row vector
 function getRowVecElem(t: Tensor[Real], i: Int): Real {
   return mtxGet(1, i, t);
 }
@@ -579,6 +645,7 @@ function stationaryProbs(lambda: Real[]): Tensor[Real] {
   return rvecCreate(3, [pi_0, pi_1, pi_2]);
 }
   
+// Bug workarounds. Bug might be solved, but needs testing
 function getMsgTreeAge(tree: MsgTree) : Real {
 	return tree.age;
 }
@@ -595,6 +662,7 @@ function getProbs(tree: ProbsTree): Tensor[Real][]{
 	return tree.probs;
 }
 
+// Compare ages between events to sort them chronologically
 function subAge(left: Event, right: Event): Int {
   let diff = subf(right.age, left.age);
   if (diff >= 0.0){
@@ -604,6 +672,7 @@ function subAge(left: Event, right: Event): Int {
 	}
 }
 
+// How many hosts in state 2?
 function count2s(count: Int, host: Int): Int {
 	if (eqi(host, 2)) {
 		return addi(count, 1);
@@ -612,6 +681,7 @@ function count2s(count: Int, host: Int): Int {
 	}
 }
 
+// How many hosts in state 1?
 function count1s(count: Int, host: Int): Int {
 	if (eqi(host, 1)) {
 		return addi(count, 1);
@@ -620,6 +690,7 @@ function count1s(count: Int, host: Int): Int {
 	}
 }
 
+// Is this host in state 2? 
 function is2(x: Int): Bool {
   if (eqi(x, 2)) {
     return true;
@@ -628,6 +699,7 @@ function is2(x: Int): Bool {
   }
 }
 
+// Is this host in states 1 or 2? 
 function is1or2(x: Int): Bool {
   if (eqi(x,1) || eqi(x,2)) { 
     return true;
